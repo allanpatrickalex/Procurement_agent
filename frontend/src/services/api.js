@@ -69,6 +69,26 @@ export const analyzeSpend = async (formData) => {
 };
 
 /**
+ * Analyze spend with optional mapping object. mapping should be a plain object mapping canonical fields to original column names.
+ */
+export const analyzeSpendWithMapping = async (file, mapping = null) => {
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (mapping) formData.append('mapping', JSON.stringify(mapping));
+
+    const response = await apiClient.post('/spend/analyze', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+    return response.data;
+  } catch (error) {
+    throw new Error(error.response?.data?.detail || 'Spend analysis failed');
+  }
+};
+
+/**
  * Get dashboard data (historical reports and metrics)
  * @returns {Promise} - Dashboard data with summary and historical reports
  */
@@ -78,6 +98,18 @@ export const getDashboard = async () => {
     return response.data;
   } catch (error) {
     throw new Error(error.response?.data?.detail || 'Failed to load dashboard');
+  }
+};
+
+/**
+ * Fetch a stored report JSON by type and id
+ */
+export const getReport = async (type, id) => {
+  try {
+    const response = await apiClient.get(`/reports/${type}/${id}`);
+    return response.data;
+  } catch (error) {
+    throw new Error(error.response?.data?.detail || 'Failed to load report');
   }
 };
 

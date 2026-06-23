@@ -3,6 +3,7 @@ import {
   Card,
   CardContent,
   CardHeader,
+  IconButton,
   Typography,
   Box,
   Chip,
@@ -81,6 +82,19 @@ function ReportViewer({ title, type, data }) {
         <CardHeader
           title={title}
           subheader={`Created: ${formatDate(data.created_at)}`}
+          action={
+            data?.id && (
+              <IconButton
+                component="a"
+                href={`/api/reports/${type}/${data.id}/pdf`}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Download PDF"
+              >
+                📄
+              </IconButton>
+            )
+          }
         />
         <CardContent>
           <Stack spacing={3}>

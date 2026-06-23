@@ -24,7 +24,7 @@ import {
   Warning as WarningIcon,
   ErrorOutline as ErrorIcon,
 } from '@mui/icons-material';
-import { getDashboard } from '../services/api';
+import { getDashboard, getReport } from '../services/api';
 import ReportViewer from '../components/ReportViewer';
 
 /**
@@ -35,6 +35,8 @@ function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedReport, setSelectedReport] = useState(null);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportError, setReportError] = useState(null);
 
   useEffect(() => {
     const fetchDashboard = async () => {
@@ -120,11 +122,20 @@ function Dashboard() {
               variant="outlined"
             />
           </Typography>
-          <ReportViewer
-            title={selectedReport.title}
-            type={selectedReport.type}
-            data={selectedReport.data}
-          />
+
+          {reportLoading ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+              <CircularProgress />
+            </Box>
+          ) : reportError ? (
+            <Alert severity="error">{reportError}</Alert>
+          ) : (
+            <ReportViewer
+              title={selectedReport.title}
+              type={selectedReport.type}
+              data={selectedReport.data}
+            />
+          )}
         </Box>
       )}
 
@@ -232,13 +243,22 @@ function Dashboard() {
                         cursor: 'pointer',
                         '&:hover': { bgcolor: 'action.hover' },
                       }}
-                      onClick={() =>
-                        setSelectedReport({
-                          title: `Supplier Analysis #${analysis.id}`,
-                          type: 'supplier',
-                          data: analysis,
-                        })
-                      }
+                      onClick={async () => {
+                        setReportError(null);
+                        setReportLoading(true);
+                        try {
+                          const full = await getReport('supplier', analysis.id);
+                          setSelectedReport({
+                            title: `Supplier Analysis #${analysis.id}`,
+                            type: 'supplier',
+                            data: full,
+                          });
+                        } catch (err) {
+                          setReportError(err.message);
+                        } finally {
+                          setReportLoading(false);
+                        }
+                      }}
                     >
                       <Typography variant="subtitle2">
                         {analysis.recommended_supplier}
@@ -281,13 +301,22 @@ function Dashboard() {
                         cursor: 'pointer',
                         '&:hover': { bgcolor: 'action.hover' },
                       }}
-                      onClick={() =>
-                        setSelectedReport({
-                          title: `Contract Review #${review.id}`,
-                          type: 'contract',
-                          data: review,
-                        })
-                      }
+                      onClick={async () => {
+                        setReportError(null);
+                        setReportLoading(true);
+                        try {
+                          const full = await getReport('contract', review.id);
+                          setSelectedReport({
+                            title: `Contract Review #${review.id}`,
+                            type: 'contract',
+                            data: full,
+                          });
+                        } catch (err) {
+                          setReportError(err.message);
+                        } finally {
+                          setReportLoading(false);
+                        }
+                      }}
                     >
                       <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
                         {review.risk_level === 'High' && (
@@ -337,13 +366,22 @@ function Dashboard() {
                         cursor: 'pointer',
                         '&:hover': { bgcolor: 'action.hover' },
                       }}
-                      onClick={() =>
-                        setSelectedReport({
-                          title: `Spend Report #${report.id}`,
-                          type: 'spend',
-                          data: report,
-                        })
-                      }
+                      onClick={async () => {
+                        setReportError(null);
+                        setReportLoading(true);
+                        try {
+                          const full = await getReport('spend', report.id);
+                          setSelectedReport({
+                            title: `Spend Report #${report.id}`,
+                            type: 'spend',
+                            data: full,
+                          });
+                        } catch (err) {
+                          setReportError(err.message);
+                        } finally {
+                          setReportLoading(false);
+                        }
+                      }}
                     >
                       <Typography variant="subtitle2">
                         {formatCurrency(report.total_spend)}

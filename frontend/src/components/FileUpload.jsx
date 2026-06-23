@@ -36,6 +36,8 @@ function FileUpload({
   const [isDragging, setIsDragging] = useState(false);
   const [error, setError] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [done, setDone] = useState(false);
 
   const maxSizeBytes = maxSize * 1024 * 1024;
 
@@ -85,14 +87,36 @@ function FileUpload({
 
     setFiles(filesToProcess);
     setIsLoading(true);
+    setDone(false);
+    setProgress(2);
+    let timer = null;
+    // start auto-incrementing progress to simulate stages
+    const startProgress = () => {
+      timer = setInterval(() => {
+        setProgress((p) => {
+          if (p >= 85) return p;
+          return Math.min(85, p + Math.random() * 10);
+        });
+      }, 400);
+    };
+
+    startProgress();
 
     try {
       await onUpload(filesToProcess);
+      // finished server work
+      setProgress(100);
+      setDone(true);
     } catch (err) {
       setError(err.message || 'Upload failed');
     } finally {
       setIsLoading(false);
-      setFiles([]);
+      // ensure progress stops
+      setTimeout(() => {
+        setProgress(0);
+        setDone(false);
+        setFiles([]);
+      }, 900);
     }
   };
 
@@ -158,10 +182,12 @@ function FileUpload({
         />
 
         {isLoading ? (
-          <Stack spacing={2} alignItems="center">
-            <CircularProgress />
+          <Stack spacing={2} alignItems="center" sx={{ width: '100%' }}>
+            <Box sx={{ width: '100%' }}>
+              <LinearProgress variant="determinate" value={progress} />
+            </Box>
             <Typography variant="body2" color="textSecondary">
-              Processing files...
+              {done ? 'Analysis complete' : 'Processing files...'}
             </Typography>
           </Stack>
         ) : (

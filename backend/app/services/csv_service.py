@@ -15,6 +15,24 @@ COLUMN_ALIASES = {
     "date": ["date", "transaction_date", "invoice_date", "posting_date"],
 }
 
+CANONICAL_FIELDS = [
+    "vendor",
+    "amount",
+    "category",
+    "date",
+    "invoice_number",
+    "purchase_order",
+    "currency",
+    "cost_center",
+]
+
+ALIASES_EXT = {
+    "vendor": ["supplier", "supplier name", "vendor name", "payee", "merchant"],
+    "amount": ["spend", "cost", "total cost", "invoice amount", "net amount"],
+    "category": ["commodity", "expense type", "gl category"],
+    "date": ["transaction date", "invoice date", "posting date"],
+}
+
 
 class CSVServiceError(Exception):
     """Raised when CSV parsing or spend calculation fails."""
@@ -23,7 +41,7 @@ class CSVServiceError(Exception):
 class CSVService:
     """Parse procurement spend CSV files and calculate summary metrics."""
 
-    def calculate_metrics(self, content: bytes, filename: str) -> dict[str, Any]:
+    def calculate_metrics(self, content: bytes, filename: str, mapping: dict | None = None) -> dict[str, Any]:
         """Parse a CSV file and return spend metrics for AI analysis."""
         if not content:
             raise CSVServiceError(f"CSV file is empty: {filename}")
@@ -38,6 +56,16 @@ class CSVService:
 
         if dataframe.empty:
             raise CSVServiceError(f"CSV file contains no rows: {filename}")
+
+        # perform column mapping first
+        # If an explicit mapping is provided (canonical -> original), apply it first
+        if mapping:
+            rename_map = {}
+            for canonical, original in mapping.items():
+                if original and original in dataframe.columns:
+                    rename_map[original] = canonical
+            if rename_map:
+                dataframe = dataframe.rename(columns=rename_map)
 
         normalized = self._normalize_columns(dataframe)
         normalized["amount"] = pd.to_numeric(normalized["amount"], errors="coerce")
@@ -159,6 +187,76 @@ class CSVService:
             )
 
         return "\n".join(lines)
+
+    def map_columns(self, dataframe) -> dict:
+        """Attempt to map dataframe columns to canonical fields with confidence scores."""
+        cols = [c.strip() for c in dataframe.columns]
+        lowered = {c.lower().strip(): c for c in cols}
+
+        mapping = {}
+        confidences = {}
+
+        # alias matching
+        for field in CANONICAL_FIELDS:
+            found = None
+            # check base aliases
+            aliases = COLUMN_ALIASES.get(field, []) + ALIASES_EXT.get(field, [])
+            for alias in aliases:
+                if alias in lowered:
+                    found = lowered[alias]
+                    confidences[field] = 0.95
+                    break
+
+            # direct name match
+            if not found and field in lowered:
+                found = lowered[field]
+                confidences[field] = 0.98
+
+            # fuzzy fallback: check substring
+            if not found:
+                for lc, original in lowered.items():
+                    if field in lc or any(part in lc for part in field.split('_')):
+                        found = original
+                        confidences[field] = 0.6
+                        break
+
+            mapping[field] = found
+            if field not in confidences:
+                confidences[field] = 0.0 if not found else 0.5
+
+        # overall confidence is min of required canonical core fields (vendor, amount, category)
+        core_conf = min(confidences.get(k, 0.0) for k in ("vendor", "amount", "category"))
+
+        result = {"mapping": mapping, "confidences": confidences, "core_confidence": core_conf}
+
+        # If low confidence, attempt to consult Gemini for mapping based on header names
+        try:
+            if core_conf < 0.6:
+                from app.services.gemini_service import get_gemini_service
+
+                try:
+                    gemini = get_gemini_service()
+                except Exception:
+                    gemini = None
+
+                if gemini:
+                    cols_text = "\n".join(cols)
+                    try:
+                        suggestion = gemini.generate_json("column_mapping", cols_text)
+                        suggested_map = suggestion.get("mapping") or {}
+                        # merge suggestions where we previously had None or low confidence
+                        for k, v in suggested_map.items():
+                            if v and (not mapping.get(k) or confidences.get(k, 0) < 0.6):
+                                result["mapping"][k] = v
+                                result["confidences"][k] = 0.75
+                        result["gemini_suggested"] = True
+                    except Exception:
+                        result["gemini_suggested"] = False
+        except Exception:
+            # best-effort: do not fail mapping if Gemini not available
+            pass
+
+        return result
 
     @staticmethod
     def _normalize_columns(dataframe: pd.DataFrame) -> pd.DataFrame:

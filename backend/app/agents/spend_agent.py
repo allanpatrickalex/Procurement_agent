@@ -12,6 +12,9 @@ from sqlalchemy.orm import Session
 from app.database.models import SpendReport
 from app.services.csv_service import CSVService, CSVServiceError
 from app.services.gemini_service import GeminiService, get_gemini_service
+from app.services.gemini_service import GeminiServiceError
+from app.schemas import SpendAnalysisModel
+from pydantic import ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +60,7 @@ class SpendAgent:
         UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
         REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    def analyze_spend(self, filename: str, content: bytes) -> SpendAnalysisResult:
+    def analyze_spend(self, filename: str, content: bytes, mapping: dict | None = None) -> SpendAnalysisResult:
         """Analyze an uploaded spend CSV file."""
         if not filename.lower().endswith(".csv"):
             raise SpendAgentError(f"Only CSV files are supported: {filename}")
@@ -74,20 +77,33 @@ class SpendAgent:
         file_path.write_bytes(content)
 
         try:
-            metrics = self.csv_service.calculate_metrics(content, safe_name)
+            metrics = self.csv_service.calculate_metrics(content, safe_name, mapping=mapping)
         except CSVServiceError as exc:
             raise SpendAgentError(str(exc)) from exc
 
         user_content = self.csv_service.format_metrics_summary(metrics)
 
         logger.info("Sending spend metrics for '%s' to Gemini for analysis", safe_name)
-        analysis = self.gemini_service.generate_json(PROMPT_NAME, user_content)
-        result = self._parse_analysis(analysis, metrics["total_spend"])
+        try:
+            analysis = self.gemini_service.generate_json(PROMPT_NAME, user_content)
+        except GeminiServiceError as exc:
+            raise SpendAgentError(str(exc)) from exc
+
+        try:
+            parsed = SpendAnalysisModel.parse_obj(analysis)
+        except ValidationError as exc:
+            logger.exception("Spend analysis validation failed: %s", exc)
+            raise SpendAgentError(f"Invalid spend analysis structure: {exc}") from exc
+
+        analysis_dict = parsed.dict()
+
+        # Normalize and compute fields such as savings_estimate using calculated metrics
+        normalized = self._parse_analysis(analysis_dict, metrics.get("total_spend", 0.0))
 
         record = SpendReport(
-            total_spend=result["total_spend"],
-            savings_estimate=result["savings_estimate"],
-            summary=result["executive_summary"],
+            total_spend=normalized.get("total_spend", metrics.get("total_spend", 0.0)),
+            savings_estimate=normalized.get("savings_estimate", 0.0),
+            summary=normalized.get("executive_summary", analysis_dict.get("executive_summary", "")),
         )
         self.db.add(record)
         self.db.commit()
@@ -95,11 +111,11 @@ class SpendAgent:
 
         report_payload = {
             "id": record.id,
-            "executive_summary": result["executive_summary"],
-            "total_spend": result["total_spend"],
-            "savings_estimate": result["savings_estimate"],
-            "savings_opportunities": result["savings_opportunities"],
-            "recommendations": result["recommendations"],
+            "executive_summary": normalized.get("executive_summary", analysis_dict.get("executive_summary", "")),
+            "total_spend": normalized.get("total_spend", metrics.get("total_spend", 0.0)),
+            "savings_estimate": normalized.get("savings_estimate", 0.0),
+            "savings_opportunities": normalized.get("savings_opportunities", []),
+            "recommendations": normalized.get("recommendations", []),
             "metrics": metrics,
             "uploaded_file": safe_name,
             "created_at": record.created_at.isoformat(),
@@ -126,50 +142,25 @@ class SpendAgent:
 
     @staticmethod
     def _parse_analysis(analysis: dict, calculated_total_spend: float) -> dict:
-        executive_summary = analysis.get("executive_summary")
-        savings_opportunities = analysis.get("savings_opportunities")
-        recommendations = analysis.get("recommendations")
-        total_spend = analysis.get("total_spend", calculated_total_spend)
-
-        if not executive_summary:
-            raise SpendAgentError("Gemini response is missing executive summary.")
-
-        if not isinstance(savings_opportunities, list) or not savings_opportunities:
-            raise SpendAgentError("Gemini response is missing savings opportunities.")
-
-        if not isinstance(recommendations, list) or not recommendations:
-            raise SpendAgentError("Gemini response is missing recommendations.")
+        # After Pydantic validation upstream, normalize and compute totals
+        executive_summary = analysis["executive_summary"]
+        savings_opportunities = analysis["savings_opportunities"]
+        recommendations = analysis["recommendations"]
 
         normalized_opportunities: list[dict] = []
         savings_estimate = 0.0
-
         for item in savings_opportunities:
-            if not isinstance(item, dict):
-                continue
-
-            category = item.get("category")
-            description = item.get("description")
-            estimated_savings = item.get("estimated_savings")
-
-            if not category or not description or estimated_savings is None:
-                continue
-
-            savings_value = float(estimated_savings)
+            savings_value = float(item["estimated_savings"])
             savings_estimate += savings_value
             normalized_opportunities.append(
                 {
-                    "category": str(category),
-                    "description": str(description),
+                    "category": str(item["category"]),
+                    "description": str(item["description"]),
                     "estimated_savings": savings_value,
                 }
             )
 
-        if not normalized_opportunities:
-            raise SpendAgentError("No valid savings opportunities were returned.")
-
         normalized_recommendations = [str(item) for item in recommendations if str(item).strip()]
-        if not normalized_recommendations:
-            raise SpendAgentError("No valid recommendations were returned.")
 
         return {
             "executive_summary": str(executive_summary),

@@ -10,8 +10,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.database.models import ContractReview
-from app.services.gemini_service import GeminiService, get_gemini_service
+from app.services.gemini_service import GeminiService, get_gemini_service, GeminiServiceError
 from app.services.pdf_service import PDFService, PDFServiceError
+from app.schemas import ContractReviewModel
+from pydantic import ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -80,8 +82,18 @@ class ContractAgent:
         user_content = f"Contract File: {safe_name}\n{'-' * 40}\n{extracted_text}"
 
         logger.info("Sending contract '%s' to Gemini for review", safe_name)
-        analysis = self.gemini_service.generate_json(PROMPT_NAME, user_content)
-        result = self._parse_analysis(analysis)
+        try:
+            analysis = self.gemini_service.generate_json(PROMPT_NAME, user_content)
+        except GeminiServiceError as exc:
+            raise ContractAgentError(str(exc)) from exc
+
+        try:
+            parsed = ContractReviewModel.parse_obj(analysis)
+        except ValidationError as exc:
+            logger.exception("Contract review validation failed: %s", exc)
+            raise ContractAgentError(f"Invalid contract review structure: {exc}") from exc
+
+        result = parsed.dict()
 
         record = ContractReview(
             risk_level=result["risk_level"],
@@ -118,60 +130,30 @@ class ContractAgent:
 
     @staticmethod
     def _parse_analysis(analysis: dict) -> dict:
-        executive_summary = analysis.get("executive_summary")
-        risk_level = analysis.get("risk_level")
-        risks = analysis.get("risks")
-        recommendations = analysis.get("recommendations")
+        # Pydantic validation upstream ensures structure; normalize values
+        executive_summary = analysis["executive_summary"]
+        risk_level = str(analysis["risk_level"]).strip().title()
+        risks = analysis["risks"]
+        recommendations = analysis["recommendations"]
 
-        if not executive_summary or not risk_level:
-            raise ContractAgentError("Gemini response is missing required contract fields.")
-
-        normalized_risk_level = str(risk_level).strip().title()
-        if normalized_risk_level not in VALID_RISK_LEVELS:
-            raise ContractAgentError(
-                f"Invalid risk level returned: {risk_level}. Expected Low, Medium, or High."
-            )
-
-        if not isinstance(risks, list) or not risks:
-            raise ContractAgentError("Gemini response is missing contract risks.")
-
-        if not isinstance(recommendations, list) or not recommendations:
-            raise ContractAgentError("Gemini response is missing recommendations.")
+        if risk_level not in VALID_RISK_LEVELS:
+            risk_level = "Medium"
 
         normalized_risks: list[dict] = []
         for item in risks:
-            if not isinstance(item, dict):
-                continue
-
-            category = item.get("category")
-            description = item.get("description")
-            severity = item.get("severity")
-
-            if not category or not description or not severity:
-                continue
-
-            normalized_severity = str(severity).strip().title()
-            if normalized_severity not in VALID_RISK_LEVELS:
-                normalized_severity = "Medium"
-
             normalized_risks.append(
                 {
-                    "category": str(category),
-                    "description": str(description),
-                    "severity": normalized_severity,
+                    "category": str(item["category"]),
+                    "description": str(item["description"]),
+                    "severity": str(item["severity"]).strip().title(),
                 }
             )
 
-        if not normalized_risks:
-            raise ContractAgentError("No valid contract risks were returned.")
-
         normalized_recommendations = [str(item) for item in recommendations if str(item).strip()]
-        if not normalized_recommendations:
-            raise ContractAgentError("No valid recommendations were returned.")
 
         return {
             "executive_summary": str(executive_summary),
-            "risk_level": normalized_risk_level,
+            "risk_level": risk_level,
             "risks": normalized_risks,
             "recommendations": normalized_recommendations,
         }

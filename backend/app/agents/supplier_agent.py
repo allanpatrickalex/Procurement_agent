@@ -10,8 +10,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.database.models import SupplierAnalysis
-from app.services.gemini_service import GeminiService, get_gemini_service
+from app.services.gemini_service import GeminiService, get_gemini_service, GeminiServiceError
 from app.services.pdf_service import PDFService, PDFServiceError
+from app.schemas import SupplierAnalysisModel
+from pydantic import ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -104,13 +106,26 @@ class SupplierAgent:
         )
 
         logger.info("Sending %d supplier quotes to Gemini for analysis", len(files))
-        analysis = self.gemini_service.generate_json(PROMPT_NAME, user_content)
-        result = self._parse_analysis(analysis)
+        try:
+            analysis = self.gemini_service.generate_json(PROMPT_NAME, user_content)
+        except GeminiServiceError as exc:
+            raise SupplierAgentError(str(exc)) from exc
+
+        try:
+            parsed = SupplierAnalysisModel.parse_obj(analysis)
+        except ValidationError as exc:
+            logger.exception("Supplier analysis validation failed: %s", exc)
+            raise SupplierAgentError(f"Invalid supplier analysis structure: {exc}") from exc
+
+        analysis_dict = parsed.dict()
+
+        # Normalize and compute top score and other derived fields
+        normalized = self._parse_analysis(analysis_dict)
 
         record = SupplierAnalysis(
-            recommended_supplier=result["recommended_supplier"],
-            score=result["top_score"],
-            summary=result["executive_summary"],
+            recommended_supplier=normalized.get("recommended_supplier", analysis_dict.get("recommended_supplier", "")),
+            score=normalized.get("top_score", 0.0),
+            summary=normalized.get("executive_summary", analysis_dict.get("executive_summary", "")),
         )
         self.db.add(record)
         self.db.commit()
@@ -118,11 +133,11 @@ class SupplierAgent:
 
         report_payload = {
             "id": record.id,
-            "recommended_supplier": result["recommended_supplier"],
-            "supplier_scores": result["supplier_scores"],
-            "reasoning": result["reasoning"],
-            "executive_summary": result["executive_summary"],
-            "score": result["top_score"],
+            "recommended_supplier": normalized.get("recommended_supplier", analysis_dict.get("recommended_supplier", "")),
+            "supplier_scores": normalized.get("supplier_scores", analysis_dict.get("supplier_scores", [])),
+            "reasoning": normalized.get("reasoning", analysis_dict.get("reasoning", "")),
+            "executive_summary": normalized.get("executive_summary", analysis_dict.get("executive_summary", "")),
+            "score": normalized.get("top_score", 0.0),
             "uploaded_files": saved_files,
             "created_at": record.created_at.isoformat(),
         }
@@ -134,62 +149,42 @@ class SupplierAgent:
 
         return SupplierAnalysisResult(
             id=record.id,
-            recommended_supplier=result["recommended_supplier"],
+            recommended_supplier=normalized.get("recommended_supplier", analysis_dict.get("recommended_supplier", "")),
             supplier_scores=[
-                SupplierScore(**score) for score in result["supplier_scores"]
+                SupplierScore(**score) for score in normalized.get("supplier_scores", analysis_dict.get("supplier_scores", []))
             ],
-            reasoning=result["reasoning"],
-            executive_summary=result["executive_summary"],
-            score=result["top_score"],
+            reasoning=normalized.get("reasoning", analysis_dict.get("reasoning", "")),
+            executive_summary=normalized.get("executive_summary", analysis_dict.get("executive_summary", "")),
+            score=normalized.get("top_score", 0.0),
             created_at=created_at,
             uploaded_files=saved_files,
         )
 
     @staticmethod
     def _parse_analysis(analysis: dict) -> dict:
-        recommended = analysis.get("recommended_supplier")
-        reasoning = analysis.get("reasoning")
-        executive_summary = analysis.get("executive_summary")
-        supplier_scores = analysis.get("supplier_scores")
+        # After Pydantic validation upstream, ensure numeric types and return
+        recommended = analysis["recommended_supplier"]
+        reasoning = analysis["reasoning"]
+        executive_summary = analysis["executive_summary"]
+        supplier_scores = analysis["supplier_scores"]
 
-        if not recommended or not reasoning or not executive_summary:
-            raise SupplierAgentError("Gemini response is missing required supplier fields.")
-
-        if not isinstance(supplier_scores, list) or not supplier_scores:
-            raise SupplierAgentError("Gemini response is missing supplier scores.")
-
-        normalized_scores: list[dict] = []
         top_score = 0.0
-
+        normalized_scores: list[dict] = []
         for item in supplier_scores:
-            if not isinstance(item, dict):
-                continue
-
-            supplier_name = item.get("supplier_name")
-            score = item.get("score")
-            rank = item.get("rank")
-            highlights = item.get("highlights") or []
-
-            if supplier_name is None or score is None or rank is None:
-                continue
-
-            score_value = float(score)
+            score_value = float(item["score"])
             normalized_scores.append(
                 {
-                    "supplier_name": str(supplier_name),
+                    "supplier_name": str(item["supplier_name"]),
                     "score": score_value,
-                    "rank": int(rank),
-                    "highlights": [str(h) for h in highlights],
+                    "rank": int(item["rank"]),
+                    "highlights": [str(h) for h in (item.get("highlights") or [])],
                 }
             )
 
-            if str(supplier_name) == str(recommended):
+            if str(item["supplier_name"]) == str(recommended):
                 top_score = score_value
 
-        if not normalized_scores:
-            raise SupplierAgentError("No valid supplier scores were returned.")
-
-        if top_score == 0.0:
+        if top_score == 0.0 and normalized_scores:
             ranked = sorted(normalized_scores, key=lambda s: s["rank"])
             top_score = float(ranked[0]["score"])
 

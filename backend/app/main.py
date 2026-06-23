@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import contracts, dashboard, spend, supplier
+from app.api import contracts, dashboard, spend, supplier, reports
 from app.database.db import init_db
 
 logging.basicConfig(
@@ -47,6 +47,7 @@ app.include_router(supplier.router, prefix="/api")
 app.include_router(contracts.router, prefix="/api")
 app.include_router(spend.router, prefix="/api")
 app.include_router(dashboard.router, prefix="/api")
+app.include_router(reports.router, prefix="/api")
 
 
 @app.get("/api/health")

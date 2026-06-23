@@ -7,6 +7,7 @@ import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+import time
 
 from dotenv import load_dotenv
 from google import genai
@@ -72,15 +73,28 @@ class GeminiService:
         system_prompt = self.load_prompt(prompt_name, **(prompt_variables or {}))
         contents = self._build_contents(system_prompt, user_content)
 
-        try:
-            response = self.client.models.generate_content(
-                model=self.model,
-                contents=contents,
-                config=types.GenerateContentConfig(temperature=temperature),
-            )
-        except Exception as exc:
+        # Retry logic for transient Gemini failures
+        last_exc = None
+        for attempt in range(3):
+            try:
+                response = self.client.models.generate_content(
+                    model=self.model,
+                    contents=contents,
+                    config=types.GenerateContentConfig(temperature=temperature),
+                )
+                break
+            except Exception as exc:
+                last_exc = exc
+                logger.warning(
+                    "Gemini text generation attempt %d failed for prompt '%s': %s",
+                    attempt + 1,
+                    prompt_name,
+                    exc,
+                )
+                time.sleep(1 + attempt * 2)
+        else:
             logger.exception("Gemini text generation failed for prompt '%s'", prompt_name)
-            raise GeminiServiceError(f"Gemini request failed: {exc}") from exc
+            raise GeminiServiceError(f"Gemini request failed: {last_exc}") from last_exc
 
         text = self._extract_text(response)
         if not text:
@@ -100,18 +114,30 @@ class GeminiService:
         system_prompt = self.load_prompt(prompt_name, **(prompt_variables or {}))
         contents = self._build_contents(system_prompt, user_content)
 
-        try:
-            response = self.client.models.generate_content(
-                model=self.model,
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    temperature=temperature,
-                    response_mime_type="application/json",
-                ),
-            )
-        except Exception as exc:
+        last_exc = None
+        for attempt in range(3):
+            try:
+                response = self.client.models.generate_content(
+                    model=self.model,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        temperature=temperature,
+                        response_mime_type="application/json",
+                    ),
+                )
+                break
+            except Exception as exc:
+                last_exc = exc
+                logger.warning(
+                    "Gemini JSON generation attempt %d failed for prompt '%s': %s",
+                    attempt + 1,
+                    prompt_name,
+                    exc,
+                )
+                time.sleep(1 + attempt * 2)
+        else:
             logger.exception("Gemini JSON generation failed for prompt '%s'", prompt_name)
-            raise GeminiServiceError(f"Gemini request failed: {exc}") from exc
+            raise GeminiServiceError(f"Gemini request failed: {last_exc}") from last_exc
 
         text = self._extract_text(response)
         if not text:
