@@ -9,8 +9,8 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.database.models import SupplierAnalysis
-from app.services.gemini_service import GeminiService, get_gemini_service, GeminiServiceError
+from app.database.models import SavingsEntry, SupplierAnalysis
+from app.services.gemini_service import GeminiService, GeminiServiceError, get_gemini_service
 from app.services.pdf_service import PDFService, PDFServiceError
 from app.schemas import SupplierAnalysisModel
 from pydantic import ValidationError
@@ -62,16 +62,10 @@ class SupplierAgent:
     def analyze_quotes(
         self,
         files: list[tuple[str, bytes]],
+        org_id: int | None = None,
     ) -> SupplierAnalysisResult:
-        """
-        Analyze uploaded supplier quote PDFs.
-
-        Args:
-            files: List of (filename, file_bytes) tuples.
-        """
         if not files:
             raise SupplierAgentError("At least one supplier quote PDF is required.")
-
         if len(files) < 2:
             raise SupplierAgentError("Upload at least two supplier quote PDFs to compare.")
 
@@ -96,9 +90,7 @@ class SupplierAgent:
             except PDFServiceError as exc:
                 raise SupplierAgentError(str(exc)) from exc
 
-            quote_sections.append(
-                f"Quote File: {safe_name}\n{'-' * 40}\n{extracted_text}"
-            )
+            quote_sections.append(f"Quote File: {safe_name}\n{'-' * 40}\n{extracted_text}")
 
         user_content = (
             f"Compare the following {len(quote_sections)} supplier quotations:\n\n"
@@ -114,30 +106,32 @@ class SupplierAgent:
         try:
             parsed = SupplierAnalysisModel.parse_obj(analysis)
         except ValidationError as exc:
-            logger.exception("Supplier analysis validation failed: %s", exc)
             raise SupplierAgentError(f"Invalid supplier analysis structure: {exc}") from exc
 
         analysis_dict = parsed.dict()
-
-        # Normalize and compute top score and other derived fields
         normalized = self._parse_analysis(analysis_dict)
 
         record = SupplierAnalysis(
-            recommended_supplier=normalized.get("recommended_supplier", analysis_dict.get("recommended_supplier", "")),
-            score=normalized.get("top_score", 0.0),
-            summary=normalized.get("executive_summary", analysis_dict.get("executive_summary", "")),
+            org_id=org_id,
+            recommended_supplier=normalized["recommended_supplier"],
+            score=normalized["top_score"],
+            summary=normalized["executive_summary"],
         )
         self.db.add(record)
         self.db.commit()
         self.db.refresh(record)
 
+        # Phase 2: record price points for benchmarking
+        if org_id:
+            self._record_price_points(org_id, record.id, normalized["supplier_scores"])
+
         report_payload = {
             "id": record.id,
-            "recommended_supplier": normalized.get("recommended_supplier", analysis_dict.get("recommended_supplier", "")),
-            "supplier_scores": normalized.get("supplier_scores", analysis_dict.get("supplier_scores", [])),
-            "reasoning": normalized.get("reasoning", analysis_dict.get("reasoning", "")),
-            "executive_summary": normalized.get("executive_summary", analysis_dict.get("executive_summary", "")),
-            "score": normalized.get("top_score", 0.0),
+            "recommended_supplier": normalized["recommended_supplier"],
+            "supplier_scores": normalized["supplier_scores"],
+            "reasoning": normalized["reasoning"],
+            "executive_summary": normalized["executive_summary"],
+            "score": normalized["top_score"],
             "uploaded_files": saved_files,
             "created_at": record.created_at.isoformat(),
         }
@@ -149,38 +143,47 @@ class SupplierAgent:
 
         return SupplierAnalysisResult(
             id=record.id,
-            recommended_supplier=normalized.get("recommended_supplier", analysis_dict.get("recommended_supplier", "")),
-            supplier_scores=[
-                SupplierScore(**score) for score in normalized.get("supplier_scores", analysis_dict.get("supplier_scores", []))
-            ],
-            reasoning=normalized.get("reasoning", analysis_dict.get("reasoning", "")),
-            executive_summary=normalized.get("executive_summary", analysis_dict.get("executive_summary", "")),
-            score=normalized.get("top_score", 0.0),
+            recommended_supplier=normalized["recommended_supplier"],
+            supplier_scores=[SupplierScore(**s) for s in normalized["supplier_scores"]],
+            reasoning=normalized["reasoning"],
+            executive_summary=normalized["executive_summary"],
+            score=normalized["top_score"],
             created_at=created_at,
             uploaded_files=saved_files,
         )
 
+    def _record_price_points(self, org_id: int, source_id: int, supplier_scores: list[dict]) -> None:
+        """Persist supplier scores as price benchmarks."""
+        from app.database.models import PricePoint
+        for s in supplier_scores:
+            pp = PricePoint(
+                org_id=org_id,
+                source_type="supplier",
+                source_id=source_id,
+                supplier_name=s.get("supplier_name"),
+                category="supplier_quote",
+                item_description="; ".join(s.get("highlights", [])),
+                unit_price=float(s.get("score", 0)),
+            )
+            self.db.add(pp)
+        try:
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+
     @staticmethod
     def _parse_analysis(analysis: dict) -> dict:
-        # After Pydantic validation upstream, ensure numeric types and return
         recommended = analysis["recommended_supplier"]
-        reasoning = analysis["reasoning"]
-        executive_summary = analysis["executive_summary"]
-        supplier_scores = analysis["supplier_scores"]
-
         top_score = 0.0
         normalized_scores: list[dict] = []
-        for item in supplier_scores:
+        for item in analysis["supplier_scores"]:
             score_value = float(item["score"])
-            normalized_scores.append(
-                {
-                    "supplier_name": str(item["supplier_name"]),
-                    "score": score_value,
-                    "rank": int(item["rank"]),
-                    "highlights": [str(h) for h in (item.get("highlights") or [])],
-                }
-            )
-
+            normalized_scores.append({
+                "supplier_name": str(item["supplier_name"]),
+                "score": score_value,
+                "rank": int(item["rank"]),
+                "highlights": [str(h) for h in (item.get("highlights") or [])],
+            })
             if str(item["supplier_name"]) == str(recommended):
                 top_score = score_value
 
@@ -190,8 +193,8 @@ class SupplierAgent:
 
         return {
             "recommended_supplier": str(recommended),
-            "reasoning": str(reasoning),
-            "executive_summary": str(executive_summary),
+            "reasoning": str(analysis["reasoning"]),
+            "executive_summary": str(analysis["executive_summary"]),
             "supplier_scores": normalized_scores,
             "top_score": top_score,
         }

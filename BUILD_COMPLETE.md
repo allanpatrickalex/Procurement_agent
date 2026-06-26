@@ -1,99 +1,118 @@
-# Procurement Advisor — Feature Summary
+# Procurement Advisor — Feature Summary (v2.0.0)
 
-This file is a concise summary of what the current agents and features in this repository do.
+This file is a concise summary of all agents, features, and endpoints in this repository.
+
+---
 
 ## Agents & Primary Capabilities
 
-- SupplierAgent
-  - Input: multiple supplier quote PDFs
-  - Actions: extract text from PDFs, compare quotes, score suppliers (0–100), rank by value, produce reasoning and executive summary
-  - Output: JSON report with `recommended_supplier`, `supplier_scores`, `reasoning`, and stored report in `backend/app/reports`
+### Core Analysis Agents
+- **SupplierAgent** — Upload multiple supplier quote PDFs → AI ranks suppliers 0–100, identifies lowest-cost winner, records `PricePoint` rows for benchmarking, and writes `SavingsEntry` rows to the tracker.
+- **ContractAgent** — Upload a single contract PDF → AI extracts risk levels (Low/Medium/High), key dates (renewal, notice period, auto-renewal), and writes `ContractKeyDate` rows for the renewal monitor.
+- **SpendAgent** — Upload a procurement CSV → AI normalizes columns, calculates spend by vendor/category, finds savings opportunities, and records `SavingsEntry` rows.
 
-- ContractAgent
-  - Input: single contract PDF
-  - Actions: extract text, detect risks (auto-renewal, escalation, termination clauses), assign risk level (Low/Medium/High), return recommendations
-  - Output: JSON risk report and stored report file
+### New Sourcing Agents
+- **NegotiationAgent** — Provide free-text context → AI returns negotiation levers, target price, BATNA, walk-away point, and a ready-to-send supplier email draft.
+- **RfpAgent** — Describe a procurement need → AI generates a complete RFP document with sections, evaluation criteria, scoring matrix, and timeline. Exports to PDF.
 
-- SpendAgent
-  - Input: procurement CSV file
-  - Actions: parse CSV, normalize columns (adaptive mapping), calculate metrics (total spend, by vendor, by category), call Gemini for savings opportunities, estimate savings
-  - Output: JSON spend analysis with `metrics`, `savings_opportunities`, `recommendations`, and stored report file
+---
 
-## Key Endpoints (FastAPI)
+## API Endpoints (FastAPI, all under `/api`)
 
-- POST /api/suppliers/analyze — upload multiple PDFs to run supplier comparison
-- POST /api/contracts/analyze — upload a single contract PDF for review
-- POST /api/spend/map — upload CSV headers (preview + suggested mapping)
-- POST /api/spend/analyze — upload CSV (optionally include confirmed mapping)
-- GET /api/reports/{type}/{id} — retrieve stored JSON report
-- GET /api/reports/{type}/{id}/pdf — download report as PDF
+### Auth (Phase 1)
+- `POST /api/auth/register` — Create org + admin user, returns JWT
+- `POST /api/auth/login` — Verify credentials, returns JWT
+- `GET /api/auth/me` — Return current user profile
 
-## Frontend Behavior
+### Core Analysis
+- `POST /api/suppliers/analyze` — Upload multiple PDFs for supplier comparison
+- `POST /api/contracts/analyze` — Upload a contract PDF for risk review + key date extraction
+- `POST /api/spend/map` — Upload CSV headers for adaptive column mapping preview
+- `POST /api/spend/analyze` — Upload CSV with confirmed column mapping
 
-- Pages available: Dashboard, SupplierAnalysis, ContractReview, SpendAnalysis
-- `FileUpload` component shows a determinate progress bar while processing and a clear "Analysis complete" message when done
-- Spend flow: `/api/spend/map` suggests column mappings; low-confidence mappings open a confirmation modal where the user can edit mappings before analysis
+### Reports
+- `GET /api/reports/{type}/{id}` — Retrieve stored JSON report
+- `GET /api/reports/{type}/{id}/pdf` — Download report as PDF
 
-## Demo Data & Samples
+### Dashboard
+- `GET /api/dashboard` — Aggregated summary: analyses, contracts, savings realized
 
-- `DEMO_DATA/procurement_test_upload.csv` — sample spend CSV
-- `DEMO_DATA/pdf_samples/` — example PDFs for supplier quotes and contracts (used by demo flows)
+### Savings Tracker (Phase 2)
+- `GET /api/savings` — Summary + entries list (identified / in_progress / realized)
+- `PATCH /api/savings/{entry_id}` — Update savings status or realized amount
 
-## How to Run (quick)
+### Contract Renewals & Notifications (Phase 3)
+- `GET /api/renewals` — All contract key dates with urgency classification
+- `PATCH /api/renewals/{key_date_id}/status` — Mark renewed or cancelled
+- `POST /api/renewals/sweep-alerts?days_ahead=N` — Scan and create notification rows
+- `GET /api/notifications` — List unread notifications
+- `POST /api/notifications/{id}/read` — Mark one notification read
+- `POST /api/notifications/mark-all-read` — Dismiss all
 
-1. Backend
-```powershell
-cd backend
-python -m venv venv
-venv\Scripts\activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
-```
+### Procurement Copilot (Phase 4)
+- `POST /api/chat` — Multi-turn AI chat with full org data context injected
 
-2. Frontend
+### Sourcing Assistant (Phase 5)
+- `POST /api/sourcing/negotiate` — Generate negotiation strategy + supplier email
+- `POST /api/sourcing/rfp` — Generate RFP document JSON
+- `POST /api/sourcing/rfp/pdf` — Export RFP to PDF bytes
+
+---
+
+## Database Models
+
+| Model | Purpose |
+|---|---|
+| `Organization` | Multi-tenant org record |
+| `User` | User with email, hashed password, role, org_id |
+| `AuditLog` | Action audit trail per org |
+| `SupplierAnalysis` | Supplier quote comparison result (org-scoped) |
+| `ContractReview` | Contract risk review result (org-scoped) |
+| `SpendReport` | Spend CSV analysis result (org-scoped) |
+| `SavingsEntry` | Savings ledger: identified → in_progress → realized |
+| `PricePoint` | Historical unit prices for benchmarking |
+| `ContractKeyDate` | Renewal dates + notice deadlines per contract |
+| `Notification` | In-app alerts (renewal alerts, etc.) |
+
+---
+
+## Frontend Pages
+
+| Route | Page | Description |
+|---|---|---|
+| `/login` | Login | Sign in / register with JWT auth |
+| `/` | Dashboard | Summary tiles: analyses, contracts, savings |
+| `/suppliers` | SupplierAnalysis | Upload + review supplier quote comparisons |
+| `/contracts` | ContractReview | Upload + review contract risk reports |
+| `/spend` | SpendAnalysis | Upload + review spend CSV analyses |
+| `/savings` | SavingsTracker | Track identified vs. realized savings |
+| `/renewals` | ContractRenewals | Renewal calendar with urgency levels |
+| `/copilot` | Copilot | Multi-turn AI chat over procurement data |
+| `/sourcing` | Sourcing | Negotiation strategies + RFP generation |
+
+---
+
+## Environment Variables
+
+| Variable | Default | Notes |
+|---|---|---|
+| `GEMINI_API_KEY` | required | Google AI Studio or Vertex API key |
+| `DATABASE_URL` | `sqlite:///procurement.db` | SQLite for local; Cloud SQL for prod |
+| `JWT_SECRET` | `dev-secret-change-in-production` | Must be overridden for production |
+| `REQUIRE_AUTH` | `false` | Set to `true` to enforce JWT on all routes |
+| `ALLOWED_ORIGINS` | `http://localhost:5173,...` | Comma-separated CORS origins |
+
+---
+
+## Running Locally
+
 ```bash
-cd frontend
-npm install
-npm run dev
+# Backend (from project root with venv active)
+venv\Scripts\activate
+uvicorn app.main:app --reload --app-dir backend   # http://localhost:8000
+
+# Frontend
+cd frontend && npm install && npm run dev          # http://localhost:5173
 ```
 
-Open the app at: http://localhost:5173
-
-## Notes & Reliability
-
-- Agents validate and normalize Gemini outputs to avoid crashes when structured fields are missing
-- CSV mapping uses alias matching and can optionally consult Gemini when confidence is low
-- Gemini calls include retry/backoff logic
-
-## Next Improvements (short list)
-
-- Add unit tests for PDFService and agent behaviors
-- Add OCR fallback for scanned PDFs
-- Add server-side progress events for real progress reporting (SSE / websockets)
-
----
-
-If you want this saved elsewhere or expanded into a README section, tell me where and I'll update it.
-
-**"Connection refused on port 8000"**
-→ Make sure backend is running: `uvicorn app.main:app --reload`
-
-**"Cannot GET /"**
-→ Make sure frontend is running: `npm run dev` in frontend directory
-
-**"PDF extraction fails"**
-→ Try a different PDF or check if it's not encrypted
-
-See **README.md** for full troubleshooting guide.
-
----
-
-## 🎊 You're All Set!
-
-Your Procurement Advisor Agent is **production-ready**. Start analyzing supplier quotes, reviewing contracts, and optimizing your procurement spend with AI! 🚀
-
-**Total Build Time**: All 10 phases completed
-**Code Quality**: Production-grade with type hints, validation, error handling
-**Documentation**: Comprehensive with API docs and troubleshooting guides
-
-Happy analyzing! 📊
+Default dev credentials (auto-seeded): `admin@local.dev` / `admin123`

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.agents.supplier_agent import SupplierAgent, SupplierAgentError, SupplierAnalysisResult
+from app.api.dependencies import CurrentUser, get_current_user
 from app.database.db import get_db
 from app.services.gemini_service import GeminiServiceError
 
@@ -18,6 +19,7 @@ router = APIRouter(prefix="/suppliers", tags=["Suppliers"])
 async def analyze_suppliers(
     files: list[UploadFile] = File(...),
     db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(get_current_user),
 ) -> SupplierAnalysisResult:
     """Upload supplier quote PDFs and receive a ranked recommendation."""
     if not files:
@@ -32,7 +34,7 @@ async def analyze_suppliers(
     agent = SupplierAgent(db)
 
     try:
-        return agent.analyze_quotes(upload_data)
+        return agent.analyze_quotes(upload_data, org_id=current_user.org_id)
     except SupplierAgentError as exc:
         logger.warning("Supplier analysis failed: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc

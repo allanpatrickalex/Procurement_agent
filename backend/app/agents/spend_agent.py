@@ -9,10 +9,9 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.database.models import SpendReport
+from app.database.models import SavingsEntry, SpendReport
 from app.services.csv_service import CSVService, CSVServiceError
-from app.services.gemini_service import GeminiService, get_gemini_service
-from app.services.gemini_service import GeminiServiceError
+from app.services.gemini_service import GeminiService, GeminiServiceError, get_gemini_service
 from app.schemas import SpendAnalysisModel
 from pydantic import ValidationError
 
@@ -60,11 +59,16 @@ class SpendAgent:
         UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
         REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    def analyze_spend(self, filename: str, content: bytes, mapping: dict | None = None) -> SpendAnalysisResult:
+    def analyze_spend(
+        self,
+        filename: str,
+        content: bytes,
+        mapping: dict | None = None,
+        org_id: int | None = None,
+    ) -> SpendAnalysisResult:
         """Analyze an uploaded spend CSV file."""
         if not filename.lower().endswith(".csv"):
             raise SpendAgentError(f"Only CSV files are supported: {filename}")
-
         if not content:
             raise SpendAgentError("Spend CSV file is empty.")
 
@@ -92,30 +96,32 @@ class SpendAgent:
         try:
             parsed = SpendAnalysisModel.parse_obj(analysis)
         except ValidationError as exc:
-            logger.exception("Spend analysis validation failed: %s", exc)
             raise SpendAgentError(f"Invalid spend analysis structure: {exc}") from exc
 
         analysis_dict = parsed.dict()
-
-        # Normalize and compute fields such as savings_estimate using calculated metrics
         normalized = self._parse_analysis(analysis_dict, metrics.get("total_spend", 0.0))
 
         record = SpendReport(
-            total_spend=normalized.get("total_spend", metrics.get("total_spend", 0.0)),
-            savings_estimate=normalized.get("savings_estimate", 0.0),
-            summary=normalized.get("executive_summary", analysis_dict.get("executive_summary", "")),
+            org_id=org_id,
+            total_spend=normalized["total_spend"],
+            savings_estimate=normalized["savings_estimate"],
+            summary=normalized["executive_summary"],
         )
         self.db.add(record)
         self.db.commit()
         self.db.refresh(record)
 
+        # Phase 2: persist savings entries to the ledger
+        if org_id:
+            self._record_savings(org_id, record.id, normalized["savings_opportunities"])
+
         report_payload = {
             "id": record.id,
-            "executive_summary": normalized.get("executive_summary", analysis_dict.get("executive_summary", "")),
-            "total_spend": normalized.get("total_spend", metrics.get("total_spend", 0.0)),
-            "savings_estimate": normalized.get("savings_estimate", 0.0),
-            "savings_opportunities": normalized.get("savings_opportunities", []),
-            "recommendations": normalized.get("recommendations", []),
+            "executive_summary": normalized["executive_summary"],
+            "total_spend": normalized["total_spend"],
+            "savings_estimate": normalized["savings_estimate"],
+            "savings_opportunities": normalized["savings_opportunities"],
+            "recommendations": normalized["recommendations"],
             "metrics": metrics,
             "uploaded_file": safe_name,
             "created_at": record.created_at.isoformat(),
@@ -128,42 +134,51 @@ class SpendAgent:
 
         return SpendAnalysisResult(
             id=record.id,
-            total_spend=result["total_spend"],
-            savings_estimate=result["savings_estimate"],
-            executive_summary=result["executive_summary"],
-            savings_opportunities=[
-                SavingsOpportunity(**item) for item in result["savings_opportunities"]
-            ],
-            recommendations=result["recommendations"],
+            total_spend=normalized["total_spend"],
+            savings_estimate=normalized["savings_estimate"],
+            executive_summary=normalized["executive_summary"],
+            savings_opportunities=[SavingsOpportunity(**item) for item in normalized["savings_opportunities"]],
+            recommendations=normalized["recommendations"],
             metrics=metrics,
             created_at=created_at,
             uploaded_file=safe_name,
         )
 
+    def _record_savings(self, org_id: int, source_id: int, opportunities: list[dict]) -> None:
+        """Write each savings opportunity to the savings ledger."""
+        for opp in opportunities:
+            entry = SavingsEntry(
+                org_id=org_id,
+                source_type="spend",
+                source_id=source_id,
+                identified_amount=float(opp.get("estimated_savings", 0)),
+                category=opp.get("category"),
+                description=opp.get("description"),
+            )
+            self.db.add(entry)
+        try:
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+
     @staticmethod
     def _parse_analysis(analysis: dict, calculated_total_spend: float) -> dict:
-        # After Pydantic validation upstream, normalize and compute totals
-        executive_summary = analysis["executive_summary"]
         savings_opportunities = analysis["savings_opportunities"]
-        recommendations = analysis["recommendations"]
-
-        normalized_opportunities: list[dict] = []
         savings_estimate = 0.0
+        normalized_opportunities: list[dict] = []
         for item in savings_opportunities:
             savings_value = float(item["estimated_savings"])
             savings_estimate += savings_value
-            normalized_opportunities.append(
-                {
-                    "category": str(item["category"]),
-                    "description": str(item["description"]),
-                    "estimated_savings": savings_value,
-                }
-            )
+            normalized_opportunities.append({
+                "category": str(item["category"]),
+                "description": str(item["description"]),
+                "estimated_savings": savings_value,
+            })
 
-        normalized_recommendations = [str(item) for item in recommendations if str(item).strip()]
+        normalized_recommendations = [str(r) for r in analysis["recommendations"] if str(r).strip()]
 
         return {
-            "executive_summary": str(executive_summary),
+            "executive_summary": str(analysis["executive_summary"]),
             "total_spend": float(calculated_total_spend),
             "savings_estimate": float(round(savings_estimate, 2)),
             "savings_opportunities": normalized_opportunities,

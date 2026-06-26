@@ -26,10 +26,21 @@ Return ONLY valid JSON with this exact structure:
       "severity": "Low | Medium | High"
     }
   ],
-  "recommendations": ["string"]
+  "recommendations": ["string"],
+  "key_dates": {
+    "effective_date": "YYYY-MM-DD or null",
+    "expiry_date": "YYYY-MM-DD or null",
+    "renewal_date": "YYYY-MM-DD or null",
+    "auto_renewal": true,
+    "notice_period_days": 30,
+    "term_length_months": 12,
+    "price_escalation_percent": null
+  }
 }
 
 Risk level guidance:
 - Low: standard terms with minor concerns.
 - Medium: notable clauses requiring negotiation or monitoring.
 - High: significant exposure, unfavorable terms, or missing protections.
+
+For key_dates: extract all dates you can find. Use null for any date not mentioned. auto_renewal should be true if the contract auto-renews, false otherwise. notice_period_days is the number of days notice required to cancel before auto-renewal.
