@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.agents.contract_agent import ContractAgent, ContractAgentError, ContractReviewResult
+from app.api.dependencies import CurrentUser, get_current_user
 from app.database.db import get_db
 from app.services.gemini_service import GeminiServiceError
 
@@ -18,6 +19,7 @@ router = APIRouter(prefix="/contracts", tags=["Contracts"])
 async def analyze_contract(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(get_current_user),
 ) -> ContractReviewResult:
     """Upload a contract PDF and receive a risk assessment."""
     content = await file.read()
@@ -26,7 +28,7 @@ async def analyze_contract(
     agent = ContractAgent(db)
 
     try:
-        return agent.analyze_contract(filename, content)
+        return agent.analyze_contract(filename, content, org_id=current_user.org_id)
     except ContractAgentError as exc:
         logger.warning("Contract review failed: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc

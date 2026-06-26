@@ -9,9 +9,11 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.database.models import SupplierAnalysis
-from app.services.gemini_service import GeminiService, get_gemini_service
+from app.database.models import SavingsEntry, SupplierAnalysis
+from app.services.gemini_service import GeminiService, GeminiServiceError, get_gemini_service
 from app.services.pdf_service import PDFService, PDFServiceError
+from app.schemas import SupplierAnalysisModel
+from pydantic import ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -60,16 +62,10 @@ class SupplierAgent:
     def analyze_quotes(
         self,
         files: list[tuple[str, bytes]],
+        org_id: int | None = None,
     ) -> SupplierAnalysisResult:
-        """
-        Analyze uploaded supplier quote PDFs.
-
-        Args:
-            files: List of (filename, file_bytes) tuples.
-        """
         if not files:
             raise SupplierAgentError("At least one supplier quote PDF is required.")
-
         if len(files) < 2:
             raise SupplierAgentError("Upload at least two supplier quote PDFs to compare.")
 
@@ -94,9 +90,7 @@ class SupplierAgent:
             except PDFServiceError as exc:
                 raise SupplierAgentError(str(exc)) from exc
 
-            quote_sections.append(
-                f"Quote File: {safe_name}\n{'-' * 40}\n{extracted_text}"
-            )
+            quote_sections.append(f"Quote File: {safe_name}\n{'-' * 40}\n{extracted_text}")
 
         user_content = (
             f"Compare the following {len(quote_sections)} supplier quotations:\n\n"
@@ -104,25 +98,40 @@ class SupplierAgent:
         )
 
         logger.info("Sending %d supplier quotes to Gemini for analysis", len(files))
-        analysis = self.gemini_service.generate_json(PROMPT_NAME, user_content)
-        result = self._parse_analysis(analysis)
+        try:
+            analysis = self.gemini_service.generate_json(PROMPT_NAME, user_content)
+        except GeminiServiceError as exc:
+            raise SupplierAgentError(str(exc)) from exc
+
+        try:
+            parsed = SupplierAnalysisModel.parse_obj(analysis)
+        except ValidationError as exc:
+            raise SupplierAgentError(f"Invalid supplier analysis structure: {exc}") from exc
+
+        analysis_dict = parsed.dict()
+        normalized = self._parse_analysis(analysis_dict)
 
         record = SupplierAnalysis(
-            recommended_supplier=result["recommended_supplier"],
-            score=result["top_score"],
-            summary=result["executive_summary"],
+            org_id=org_id,
+            recommended_supplier=normalized["recommended_supplier"],
+            score=normalized["top_score"],
+            summary=normalized["executive_summary"],
         )
         self.db.add(record)
         self.db.commit()
         self.db.refresh(record)
 
+        # Phase 2: record price points for benchmarking
+        if org_id:
+            self._record_price_points(org_id, record.id, normalized["supplier_scores"])
+
         report_payload = {
             "id": record.id,
-            "recommended_supplier": result["recommended_supplier"],
-            "supplier_scores": result["supplier_scores"],
-            "reasoning": result["reasoning"],
-            "executive_summary": result["executive_summary"],
-            "score": result["top_score"],
+            "recommended_supplier": normalized["recommended_supplier"],
+            "supplier_scores": normalized["supplier_scores"],
+            "reasoning": normalized["reasoning"],
+            "executive_summary": normalized["executive_summary"],
+            "score": normalized["top_score"],
             "uploaded_files": saved_files,
             "created_at": record.created_at.isoformat(),
         }
@@ -134,69 +143,58 @@ class SupplierAgent:
 
         return SupplierAnalysisResult(
             id=record.id,
-            recommended_supplier=result["recommended_supplier"],
-            supplier_scores=[
-                SupplierScore(**score) for score in result["supplier_scores"]
-            ],
-            reasoning=result["reasoning"],
-            executive_summary=result["executive_summary"],
-            score=result["top_score"],
+            recommended_supplier=normalized["recommended_supplier"],
+            supplier_scores=[SupplierScore(**s) for s in normalized["supplier_scores"]],
+            reasoning=normalized["reasoning"],
+            executive_summary=normalized["executive_summary"],
+            score=normalized["top_score"],
             created_at=created_at,
             uploaded_files=saved_files,
         )
 
+    def _record_price_points(self, org_id: int, source_id: int, supplier_scores: list[dict]) -> None:
+        """Persist supplier scores as price benchmarks."""
+        from app.database.models import PricePoint
+        for s in supplier_scores:
+            pp = PricePoint(
+                org_id=org_id,
+                source_type="supplier",
+                source_id=source_id,
+                supplier_name=s.get("supplier_name"),
+                category="supplier_quote",
+                item_description="; ".join(s.get("highlights", [])),
+                unit_price=float(s.get("score", 0)),
+            )
+            self.db.add(pp)
+        try:
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+
     @staticmethod
     def _parse_analysis(analysis: dict) -> dict:
-        recommended = analysis.get("recommended_supplier")
-        reasoning = analysis.get("reasoning")
-        executive_summary = analysis.get("executive_summary")
-        supplier_scores = analysis.get("supplier_scores")
-
-        if not recommended or not reasoning or not executive_summary:
-            raise SupplierAgentError("Gemini response is missing required supplier fields.")
-
-        if not isinstance(supplier_scores, list) or not supplier_scores:
-            raise SupplierAgentError("Gemini response is missing supplier scores.")
-
-        normalized_scores: list[dict] = []
+        recommended = analysis["recommended_supplier"]
         top_score = 0.0
-
-        for item in supplier_scores:
-            if not isinstance(item, dict):
-                continue
-
-            supplier_name = item.get("supplier_name")
-            score = item.get("score")
-            rank = item.get("rank")
-            highlights = item.get("highlights") or []
-
-            if supplier_name is None or score is None or rank is None:
-                continue
-
-            score_value = float(score)
-            normalized_scores.append(
-                {
-                    "supplier_name": str(supplier_name),
-                    "score": score_value,
-                    "rank": int(rank),
-                    "highlights": [str(h) for h in highlights],
-                }
-            )
-
-            if str(supplier_name) == str(recommended):
+        normalized_scores: list[dict] = []
+        for item in analysis["supplier_scores"]:
+            score_value = float(item["score"])
+            normalized_scores.append({
+                "supplier_name": str(item["supplier_name"]),
+                "score": score_value,
+                "rank": int(item["rank"]),
+                "highlights": [str(h) for h in (item.get("highlights") or [])],
+            })
+            if str(item["supplier_name"]) == str(recommended):
                 top_score = score_value
 
-        if not normalized_scores:
-            raise SupplierAgentError("No valid supplier scores were returned.")
-
-        if top_score == 0.0:
+        if top_score == 0.0 and normalized_scores:
             ranked = sorted(normalized_scores, key=lambda s: s["rank"])
             top_score = float(ranked[0]["score"])
 
         return {
             "recommended_supplier": str(recommended),
-            "reasoning": str(reasoning),
-            "executive_summary": str(executive_summary),
+            "reasoning": str(analysis["reasoning"]),
+            "executive_summary": str(analysis["executive_summary"]),
             "supplier_scores": normalized_scores,
             "top_score": top_score,
         }

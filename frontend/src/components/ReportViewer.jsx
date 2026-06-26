@@ -12,161 +12,256 @@ import {
   TableContainer,
   TableHead,
   TableRow,
-  Paper,
   Grid,
   Stack,
   Divider,
+  Button,
+  LinearProgress,
 } from '@mui/material';
 import {
   CheckCircle as CheckCircleIcon,
   Warning as WarningIcon,
   Error as ErrorIcon,
+  PictureAsPdf as PdfIcon,
+  EmojiEvents as TrophyIcon,
+  AttachMoney as MoneyIcon,
+  Savings as SavingsIcon,
 } from '@mui/icons-material';
 
-/**
- * Generic report viewer component for displaying analysis results.
- *
- * @param {Object} props - Component props
- * @param {string} props.title - Report title
- * @param {string} props.type - Report type: 'supplier', 'contract', or 'spend'
- * @param {Object} props.data - Report data
- */
 function ReportViewer({ title, type, data }) {
   if (!data) {
     return (
-      <Card sx={{ bgcolor: 'background.paper' }}>
-        <CardHeader title={title} />
-        <CardContent>
-          <Typography color="textSecondary">No data available</Typography>
+      <Card>
+        <CardContent sx={{ py: 6, textAlign: 'center' }}>
+          <Typography color="text.secondary">No data available</Typography>
         </CardContent>
       </Card>
     );
   }
 
   const getRiskColor = (level) => {
-    const levelLower = level?.toLowerCase() || 'medium';
-    if (levelLower === 'low') return 'success';
-    if (levelLower === 'high') return 'error';
+    const l = level?.toLowerCase() || 'medium';
+    if (l === 'low') return 'success';
+    if (l === 'high') return 'error';
     return 'warning';
   };
 
   const getRiskIcon = (level) => {
-    const levelLower = level?.toLowerCase() || 'medium';
-    if (levelLower === 'low') return <CheckCircleIcon />;
-    if (levelLower === 'high') return <ErrorIcon />;
-    return <WarningIcon />;
+    const l = level?.toLowerCase() || 'medium';
+    if (l === 'low') return <CheckCircleIcon fontSize="small" />;
+    if (l === 'high') return <ErrorIcon fontSize="small" />;
+    return <WarningIcon fontSize="small" />;
   };
 
-  const formatCurrency = (value) => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-    }).format(value);
+  const getRiskBorderColor = (level) => {
+    const l = level?.toLowerCase() || 'medium';
+    if (l === 'low' || l === 'low risk') return '#10B981';
+    if (l === 'high' || l === 'high risk') return '#EF4444';
+    return '#F59E0B';
   };
 
-  const formatDate = (dateString) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
+  const formatCurrency = (value) =>
+    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
+
+  const formatDate = (dateString) =>
+    new Date(dateString).toLocaleDateString('en-US', {
+      year: 'numeric', month: 'short', day: 'numeric',
+      hour: '2-digit', minute: '2-digit',
     });
-  };
 
-  // Supplier Analysis Report
+  const SectionLabel = ({ children }) => (
+    <Typography
+      variant="caption"
+      sx={{
+        display: 'block',
+        fontWeight: 600,
+        textTransform: 'uppercase',
+        letterSpacing: '0.06em',
+        color: 'text.secondary',
+        mb: 1.5,
+      }}
+    >
+      {children}
+    </Typography>
+  );
+
+  const SummaryBox = ({ children }) => (
+    <Box
+      sx={{
+        p: 2.5,
+        borderRadius: '10px',
+        border: '1px solid #BFDBFE',
+        backgroundColor: '#EFF6FF',
+        color: '#1E40AF',
+        lineHeight: 1.7,
+        fontSize: '0.9rem',
+      }}
+    >
+      {children}
+    </Box>
+  );
+
+  const PdfButton = ({ id, reportType }) =>
+    id ? (
+      <Button
+        component="a"
+        href={`/api/reports/${reportType}/${id}/pdf`}
+        target="_blank"
+        rel="noopener noreferrer"
+        size="small"
+        startIcon={<PdfIcon fontSize="small" />}
+        variant="outlined"
+        sx={{ flexShrink: 0 }}
+      >
+        Export PDF
+      </Button>
+    ) : null;
+
+  // ── Supplier Analysis ──────────────────────────────────────────────────────
   if (type === 'supplier') {
     return (
-      <Card sx={{ bgcolor: 'background.paper' }}>
+      <Card>
         <CardHeader
           title={title}
-          subheader={`Created: ${formatDate(data.created_at)}`}
+          subheader={`Generated ${formatDate(data.created_at)}`}
+          action={<PdfButton id={data?.id} reportType={type} />}
         />
+        <Divider />
         <CardContent>
-          <Stack spacing={3}>
+          <Stack spacing={4}>
             {/* Executive Summary */}
             <Box>
-              <Typography variant="h6" gutterBottom>
-                Executive Summary
-              </Typography>
-              <Paper sx={{ p: 2, bgcolor: 'info.light' }}>
-                <Typography>{data.executive_summary}</Typography>
-              </Paper>
+              <SectionLabel>Executive Summary</SectionLabel>
+              <SummaryBox>{data.executive_summary}</SummaryBox>
             </Box>
 
-            {/* Recommendation */}
+            {/* Recommended Supplier */}
             <Box>
-              <Typography variant="h6" gutterBottom>
-                Recommended Supplier
-              </Typography>
-              <Chip
-                label={data.recommended_supplier}
-                color="primary"
-                variant="outlined"
-                sx={{ fontSize: '1rem', p: 3 }}
-              />
+              <SectionLabel>Recommended Supplier</SectionLabel>
+              <Box
+                sx={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 1.5,
+                  px: 2.5,
+                  py: 1.5,
+                  borderRadius: '10px',
+                  border: '1px solid',
+                  borderColor: 'success.light',
+                  backgroundColor: 'success.light',
+                }}
+              >
+                <TrophyIcon sx={{ color: '#D97706', fontSize: 22 }} />
+                <Typography variant="subtitle1" color="success.dark">
+                  {data.recommended_supplier}
+                </Typography>
+              </Box>
             </Box>
 
-            {/* Supplier Scores */}
+            {/* Supplier Rankings */}
             <Box>
-              <Typography variant="h6" gutterBottom>
-                Supplier Rankings
-              </Typography>
+              <SectionLabel>Supplier Rankings</SectionLabel>
               <TableContainer>
-                <Table>
-                  <TableHead sx={{ bgcolor: 'primary.light' }}>
+                <Table size="small">
+                  <TableHead>
                     <TableRow>
-                      <TableCell>Rank</TableCell>
+                      <TableCell width={48}>Rank</TableCell>
                       <TableCell>Supplier</TableCell>
-                      <TableCell align="right">Score</TableCell>
+                      <TableCell width={180}>Score</TableCell>
                       <TableCell>Highlights</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {data.supplier_scores?.map((supplier, idx) => (
-                      <TableRow
-                        key={idx}
-                        sx={{
-                          backgroundColor:
-                            supplier.supplier_name ===
-                            data.recommended_supplier
-                              ? 'success.light'
-                              : 'inherit',
-                        }}
-                      >
-                        <TableCell>{supplier.rank}</TableCell>
-                        <TableCell>{supplier.supplier_name}</TableCell>
-                        <TableCell align="right">
-                          <strong>{supplier.score}/100</strong>
-                        </TableCell>
-                        <TableCell>
-                          {supplier.highlights?.join(', ') || 'N/A'}
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                    {data.supplier_scores?.map((supplier, idx) => {
+                      const isWinner = supplier.supplier_name === data.recommended_supplier;
+                      return (
+                        <TableRow
+                          key={idx}
+                          sx={{
+                            backgroundColor: isWinner ? '#ECFDF5' : 'inherit',
+                            '&:last-child td': { borderBottom: 'none' },
+                          }}
+                        >
+                          <TableCell>
+                            <Box
+                              sx={{
+                                width: 24,
+                                height: 24,
+                                borderRadius: '50%',
+                                backgroundColor: isWinner ? 'success.main' : '#E2E8F0',
+                                color: isWinner ? 'white' : 'text.secondary',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontSize: '0.75rem',
+                                fontWeight: 700,
+                              }}
+                            >
+                              {supplier.rank}
+                            </Box>
+                          </TableCell>
+                          <TableCell>
+                            <Typography variant="body2" fontWeight={isWinner ? 600 : 400}>
+                              {supplier.supplier_name}
+                            </Typography>
+                          </TableCell>
+                          <TableCell>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                              <LinearProgress
+                                variant="determinate"
+                                value={Math.min(supplier.score, 100)}
+                                color={isWinner ? 'success' : 'primary'}
+                                sx={{ flex: 1, height: 6 }}
+                              />
+                              <Typography
+                                variant="caption"
+                                fontWeight={600}
+                                sx={{ minWidth: 32, color: isWinner ? 'success.dark' : 'text.primary' }}
+                              >
+                                {supplier.score}
+                              </Typography>
+                            </Box>
+                          </TableCell>
+                          <TableCell>
+                            <Typography variant="caption" color="text.secondary">
+                              {supplier.highlights?.join(' · ') || '—'}
+                            </Typography>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               </TableContainer>
             </Box>
 
-            {/* Reasoning */}
+            {/* Analysis Reasoning */}
             <Box>
-              <Typography variant="h6" gutterBottom>
-                Analysis Reasoning
-              </Typography>
-              <Paper sx={{ p: 2, bgcolor: 'grey.50' }}>
-                <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+              <SectionLabel>Analysis Reasoning</SectionLabel>
+              <Box
+                sx={{
+                  p: 2.5,
+                  borderRadius: '10px',
+                  border: '1px solid',
+                  borderColor: 'divider',
+                  bgcolor: '#FAFAFA',
+                }}
+              >
+                <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', color: 'text.secondary', lineHeight: 1.7 }}>
                   {data.reasoning}
                 </Typography>
-              </Paper>
+              </Box>
             </Box>
 
-            {/* Files Uploaded */}
-            {data.uploaded_files && data.uploaded_files.length > 0 && (
-              <Box>
-                <Typography variant="subtitle2" color="textSecondary">
-                  Files Analyzed: {data.uploaded_files.join(', ')}
+            {/* Files analyzed */}
+            {data.uploaded_files?.length > 0 && (
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center' }}>
+                <Typography variant="caption" color="text.secondary" fontWeight={500}>
+                  Files analyzed:
                 </Typography>
+                {data.uploaded_files.map((f) => (
+                  <Chip key={f} label={f} size="small" variant="outlined" />
+                ))}
               </Box>
             )}
           </Stack>
@@ -175,93 +270,116 @@ function ReportViewer({ title, type, data }) {
     );
   }
 
-  // Contract Review Report
+  // ── Contract Review ────────────────────────────────────────────────────────
   if (type === 'contract') {
+    const riskColor = getRiskColor(data.risk_level);
     return (
-      <Card sx={{ bgcolor: 'background.paper' }}>
+      <Card>
         <CardHeader
           title={title}
-          subheader={`Created: ${formatDate(data.created_at)}`}
+          subheader={`Generated ${formatDate(data.created_at)}`}
+          action={<PdfButton id={data?.id} reportType={type} />}
         />
+        <Divider />
         <CardContent>
-          <Stack spacing={3}>
+          <Stack spacing={4}>
             {/* Risk Level */}
             <Box>
-              <Typography variant="h6" gutterBottom>
-                Risk Assessment
-              </Typography>
+              <SectionLabel>Overall Risk Level</SectionLabel>
               <Chip
                 icon={getRiskIcon(data.risk_level)}
-                label={data.risk_level}
-                color={getRiskColor(data.risk_level)}
-                variant="outlined"
-                sx={{ fontSize: '1rem', p: 3 }}
+                label={`${data.risk_level} Risk`}
+                color={riskColor}
+                sx={{ fontSize: '0.875rem', py: 2.5, px: 1, fontWeight: 600 }}
               />
             </Box>
 
             {/* Executive Summary */}
             <Box>
-              <Typography variant="h6" gutterBottom>
-                Executive Summary
-              </Typography>
-              <Paper sx={{ p: 2, bgcolor: 'info.light' }}>
-                <Typography>{data.executive_summary}</Typography>
-              </Paper>
+              <SectionLabel>Executive Summary</SectionLabel>
+              <SummaryBox>{data.executive_summary}</SummaryBox>
             </Box>
 
-            {/* Risks */}
-            <Box>
-              <Typography variant="h6" gutterBottom>
-                Identified Risks
-              </Typography>
-              <Stack spacing={2}>
-                {data.risks?.map((risk, idx) => (
-                  <Paper key={idx} sx={{ p: 2, border: '1px solid' }}>
+            {/* Identified Risks */}
+            {data.risks?.length > 0 && (
+              <Box>
+                <SectionLabel>Identified Risks ({data.risks.length})</SectionLabel>
+                <Stack spacing={1.5}>
+                  {data.risks.map((risk, idx) => (
                     <Box
+                      key={idx}
                       sx={{
-                        display: 'flex',
-                        gap: 1,
-                        alignItems: 'start',
-                        mb: 1,
+                        p: 2.5,
+                        borderRadius: '10px',
+                        border: '1px solid',
+                        borderLeft: '4px solid',
+                        borderColor: 'divider',
+                        borderLeftColor: getRiskBorderColor(risk.severity),
+                        bgcolor: 'background.paper',
                       }}
                     >
-                      <Chip
-                        label={risk.severity}
-                        size="small"
-                        color={getRiskColor(risk.severity)}
-                        variant="outlined"
-                      />
-                      <Typography variant="subtitle2">
-                        {risk.category}
+                      <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 1 }}>
+                        <Chip
+                          label={risk.severity}
+                          size="small"
+                          color={getRiskColor(risk.severity)}
+                          sx={{ fontWeight: 600 }}
+                        />
+                        <Typography variant="subtitle2">{risk.category}</Typography>
+                      </Box>
+                      <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.6 }}>
+                        {risk.description}
                       </Typography>
                     </Box>
-                    <Typography variant="body2">
-                      {risk.description}
-                    </Typography>
-                  </Paper>
-                ))}
-              </Stack>
-            </Box>
+                  ))}
+                </Stack>
+              </Box>
+            )}
 
             {/* Recommendations */}
-            <Box>
-              <Typography variant="h6" gutterBottom>
-                Recommendations
-              </Typography>
-              <Stack spacing={1} component="ul" sx={{ pl: 2 }}>
-                {data.recommendations?.map((rec, idx) => (
-                  <Typography component="li" key={idx} variant="body2">
-                    {rec}
-                  </Typography>
-                ))}
-              </Stack>
-            </Box>
+            {data.recommendations?.length > 0 && (
+              <Box>
+                <SectionLabel>Recommendations</SectionLabel>
+                <Stack spacing={1}>
+                  {data.recommendations.map((rec, idx) => (
+                    <Box
+                      key={idx}
+                      sx={{ display: 'flex', gap: 1.5, alignItems: 'flex-start' }}
+                    >
+                      <Box
+                        sx={{
+                          width: 22,
+                          height: 22,
+                          borderRadius: '50%',
+                          backgroundColor: 'primary.light',
+                          color: 'primary.main',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: '0.7rem',
+                          fontWeight: 700,
+                          flexShrink: 0,
+                          mt: 0.15,
+                        }}
+                      >
+                        {idx + 1}
+                      </Box>
+                      <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.6 }}>
+                        {rec}
+                      </Typography>
+                    </Box>
+                  ))}
+                </Stack>
+              </Box>
+            )}
 
-            {/* File Info */}
             {data.uploaded_file && (
-              <Typography variant="caption" color="textSecondary">
-                File: {data.uploaded_file}
-              </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Typography variant="caption" color="text.secondary" fontWeight={500}>
+                  File analyzed:
+                </Typography>
+                <Chip label={data.uploaded_file} size="small" variant="outlined" />
+              </Box>
             )}
           </Stack>
         </CardContent>
@@ -269,122 +387,178 @@ function ReportViewer({ title, type, data }) {
     );
   }
 
-  // Spend Analysis Report
+  // ── Spend Analysis ─────────────────────────────────────────────────────────
   if (type === 'spend') {
     return (
-      <Card sx={{ bgcolor: 'background.paper' }}>
+      <Card>
         <CardHeader
           title={title}
-          subheader={`Created: ${formatDate(data.created_at)}`}
+          subheader={`Generated ${formatDate(data.created_at)}`}
+          action={<PdfButton id={data?.id} reportType={type} />}
         />
+        <Divider />
         <CardContent>
-          <Stack spacing={3}>
+          <Stack spacing={4}>
             {/* Key Metrics */}
             <Grid container spacing={2}>
-              <Grid item xs={6} sm={3}>
-                <Paper sx={{ p: 2, textAlign: 'center', bgcolor: 'primary.light' }}>
-                  <Typography variant="caption" color="textSecondary">
-                    Total Spend
-                  </Typography>
-                  <Typography variant="h6" sx={{ fontWeight: 'bold' }}>
-                    {formatCurrency(data.total_spend)}
-                  </Typography>
-                </Paper>
-              </Grid>
-              <Grid item xs={6} sm={3}>
-                <Paper
+              <Grid item xs={12} sm={6}>
+                <Box
                   sx={{
-                    p: 2,
-                    textAlign: 'center',
-                    bgcolor: 'success.light',
+                    p: 3,
+                    borderRadius: '10px',
+                    border: '1px solid #BFDBFE',
+                    backgroundColor: '#EFF6FF',
                   }}
                 >
-                  <Typography variant="caption" color="textSecondary">
-                    Savings Identified
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                    <MoneyIcon sx={{ color: '#3B82F6', fontSize: 20 }} />
+                    <Typography variant="caption" fontWeight={600} color="#1E40AF" sx={{ textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                      Total Spend Analyzed
+                    </Typography>
+                  </Box>
+                  <Typography variant="h5" fontWeight={700} color="#1E3A8A">
+                    {formatCurrency(data.total_spend)}
                   </Typography>
-                  <Typography variant="h6" sx={{ fontWeight: 'bold' }}>
+                </Box>
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <Box
+                  sx={{
+                    p: 3,
+                    borderRadius: '10px',
+                    border: '1px solid #A7F3D0',
+                    backgroundColor: '#ECFDF5',
+                  }}
+                >
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                    <SavingsIcon sx={{ color: '#10B981', fontSize: 20 }} />
+                    <Typography variant="caption" fontWeight={600} color="#065F46" sx={{ textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                      Savings Identified
+                    </Typography>
+                  </Box>
+                  <Typography variant="h5" fontWeight={700} color="#064E3B">
                     {formatCurrency(data.savings_estimate)}
                   </Typography>
-                </Paper>
+                </Box>
               </Grid>
               {data.metrics?.transaction_count && (
-                <Grid item xs={6} sm={3}>
-                  <Paper sx={{ p: 2, textAlign: 'center', bgcolor: 'info.light' }}>
-                    <Typography variant="caption" color="textSecondary">
+                <Grid item xs={12} sm={6}>
+                  <Box
+                    sx={{
+                      p: 3,
+                      borderRadius: '10px',
+                      border: '1px solid #E2E8F0',
+                      backgroundColor: '#F8FAFC',
+                    }}
+                  >
+                    <Typography variant="caption" fontWeight={600} color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: '0.06em', display: 'block', mb: 1 }}>
                       Transactions
                     </Typography>
-                    <Typography variant="h6" sx={{ fontWeight: 'bold' }}>
-                      {data.metrics.transaction_count}
+                    <Typography variant="h5" fontWeight={700}>
+                      {data.metrics.transaction_count.toLocaleString()}
                     </Typography>
-                  </Paper>
+                  </Box>
                 </Grid>
               )}
             </Grid>
 
-            <Divider />
-
             {/* Executive Summary */}
             <Box>
-              <Typography variant="h6" gutterBottom>
-                Executive Summary
-              </Typography>
-              <Paper sx={{ p: 2, bgcolor: 'info.light' }}>
-                <Typography>{data.executive_summary}</Typography>
-              </Paper>
+              <SectionLabel>Executive Summary</SectionLabel>
+              <SummaryBox>{data.executive_summary}</SummaryBox>
             </Box>
 
             {/* Savings Opportunities */}
-            <Box>
-              <Typography variant="h6" gutterBottom>
-                Savings Opportunities
-              </Typography>
-              <Stack spacing={2}>
-                {data.savings_opportunities?.map((opp, idx) => (
-                  <Paper key={idx} sx={{ p: 2 }}>
+            {data.savings_opportunities?.length > 0 && (
+              <Box>
+                <SectionLabel>Savings Opportunities ({data.savings_opportunities.length})</SectionLabel>
+                <Stack spacing={1.5}>
+                  {data.savings_opportunities.map((opp, idx) => (
                     <Box
+                      key={idx}
                       sx={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        mb: 1,
+                        p: 2.5,
+                        borderRadius: '10px',
+                        border: '1px solid',
+                        borderLeft: '4px solid #10B981',
+                        borderColor: 'divider',
+                        borderLeftColor: '#10B981',
+                        bgcolor: 'background.paper',
                       }}
                     >
-                      <Typography variant="subtitle2">
-                        {opp.category}
-                      </Typography>
-                      <Typography
-                        variant="subtitle2"
-                        sx={{ color: 'success.main', fontWeight: 'bold' }}
+                      <Box
+                        sx={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          mb: 0.75,
+                        }}
                       >
-                        {formatCurrency(opp.estimated_savings)}
+                        <Typography variant="subtitle2">{opp.category}</Typography>
+                        <Chip
+                          label={formatCurrency(opp.estimated_savings)}
+                          size="small"
+                          sx={{
+                            backgroundColor: '#D1FAE5',
+                            color: '#065F46',
+                            fontWeight: 700,
+                            fontSize: '0.75rem',
+                          }}
+                        />
+                      </Box>
+                      <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.6 }}>
+                        {opp.description}
                       </Typography>
                     </Box>
-                    <Typography variant="body2">
-                      {opp.description}
-                    </Typography>
-                  </Paper>
-                ))}
-              </Stack>
-            </Box>
+                  ))}
+                </Stack>
+              </Box>
+            )}
 
             {/* Recommendations */}
-            <Box>
-              <Typography variant="h6" gutterBottom>
-                Recommendations
-              </Typography>
-              <Stack spacing={1} component="ul" sx={{ pl: 2 }}>
-                {data.recommendations?.map((rec, idx) => (
-                  <Typography component="li" key={idx} variant="body2">
-                    {rec}
-                  </Typography>
-                ))}
-              </Stack>
-            </Box>
+            {data.recommendations?.length > 0 && (
+              <Box>
+                <SectionLabel>Recommendations</SectionLabel>
+                <Stack spacing={1}>
+                  {data.recommendations.map((rec, idx) => (
+                    <Box
+                      key={idx}
+                      sx={{ display: 'flex', gap: 1.5, alignItems: 'flex-start' }}
+                    >
+                      <Box
+                        sx={{
+                          width: 22,
+                          height: 22,
+                          borderRadius: '50%',
+                          backgroundColor: '#D1FAE5',
+                          color: '#065F46',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: '0.7rem',
+                          fontWeight: 700,
+                          flexShrink: 0,
+                          mt: 0.15,
+                        }}
+                      >
+                        {idx + 1}
+                      </Box>
+                      <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.6 }}>
+                        {rec}
+                      </Typography>
+                    </Box>
+                  ))}
+                </Stack>
+              </Box>
+            )}
 
-            {/* File Info */}
             {data.uploaded_file && (
-              <Typography variant="caption" color="textSecondary">
-                File: {data.uploaded_file}
-              </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Typography variant="caption" color="text.secondary" fontWeight={500}>
+                  File analyzed:
+                </Typography>
+                <Chip label={data.uploaded_file} size="small" variant="outlined" />
+              </Box>
             )}
           </Stack>
         </CardContent>
@@ -392,8 +566,13 @@ function ReportViewer({ title, type, data }) {
     );
   }
 
-  // Default
-  return <Card><CardContent><Typography>Unknown report type</Typography></CardContent></Card>;
+  return (
+    <Card>
+      <CardContent>
+        <Typography color="text.secondary">Unknown report type</Typography>
+      </CardContent>
+    </Card>
+  );
 }
 
 export default ReportViewer;

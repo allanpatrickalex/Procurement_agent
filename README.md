@@ -199,6 +199,17 @@ cd frontend
 npm run dev
 ```
 
+---
+
+## Quick Demo (5 minutes)
+
+1. Create a `.env` in the project root and add `GEMINI_API_KEY=your_key_here`.
+2. Install backend deps: `pip install -r requirements.txt`.
+3. Start backend: `uvicorn app.main:app --reload --port 8000` (run from `backend`).
+4. Start frontend: `npm install` then `npm run dev` (run from `frontend`).
+5. Open the UI and upload `DEMO_DATA/procurement_test_upload.csv` to the Spend Analysis page.
+
+
 Output should show:
 ```
   VITE v6.0.0  ready in XXX ms
